@@ -143,7 +143,10 @@ export default function TutorPage() {
       2,
       "0"
     )}`;
-    return item.date.startsWith(monthKey);
+
+    const weekday = getWeekdayFromDateKey(item.date);
+
+    return item.date.startsWith(monthKey) && weekday !== "금";
   });
 
   const sortedMonthRequests = [...monthRequests].sort((a, b) => {
@@ -268,7 +271,7 @@ export default function TutorPage() {
               <h1>디지털 튜터 월별 수업지원 신청 목록</h1>
               <div class="subtitle">${currentYear}년 ${
       currentMonth + 1
-    }월</div>
+    }월, 월~목 운영</div>
             </div>
             <div class="summary">총 ${sortedMonthRequests.length}건</div>
           </div>
@@ -280,7 +283,7 @@ export default function TutorPage() {
                 <th>날짜</th>
                 <th>요일</th>
                 <th>교시</th>
-                <th>학반</th>
+                <th>학반/장소</th>
                 <th>상태</th>
               </tr>
             </thead>
@@ -317,7 +320,7 @@ export default function TutorPage() {
               🌿 디지털 튜터 수업지원 대시보드
             </h1>
             <p className="text-xs md:text-sm text-slate-500">
-              날짜별 1~4교시 신청 현황입니다.
+              월~목요일 1~4교시 신청 현황입니다.
             </p>
           </div>
 
@@ -366,7 +369,11 @@ export default function TutorPage() {
             {weekdays.map((day) => (
               <div
                 key={day}
-                className="text-center text-sm font-black bg-slate-100 text-slate-800 border border-slate-200 rounded-lg py-1.5"
+                className={`text-center text-sm font-black border rounded-lg py-1.5 ${
+                  day === "금"
+                    ? "bg-slate-50 text-slate-400 border-slate-100"
+                    : "bg-slate-100 text-slate-800 border-slate-200"
+                }`}
               >
                 {day}
               </div>
@@ -388,68 +395,81 @@ export default function TutorPage() {
 
                   const dateKey = toDateKey(date);
                   const isToday = dateKey === toDateKey(today);
+                  const isFriday = date.getDay() === 5;
 
                   return (
                     <div
                       key={dateKey}
                       className={`min-h-[105px] rounded-lg border p-1.5 ${
-                        isToday
+                        isFriday
+                          ? "bg-slate-50 border-slate-100"
+                          : isToday
                           ? "bg-green-50 border-green-500"
                           : "bg-white border-slate-200"
                       }`}
                     >
                       <div className="flex justify-between items-center mb-1">
-                        <div className="font-black text-sm text-slate-900">
+                        <div
+                          className={`font-black text-sm ${
+                            isFriday ? "text-slate-400" : "text-slate-900"
+                          }`}
+                        >
                           {date.getDate()}일
                         </div>
-                        {isToday && (
+                        {isToday && !isFriday && (
                           <div className="text-[10px] bg-green-700 text-white rounded-full px-1.5 py-0.5 font-bold">
                             오늘
                           </div>
                         )}
                       </div>
 
-                      <div className="grid grid-cols-2 gap-1">
-                        {periods.map((period) => {
-                          const item = findRequest(dateKey, period);
+                      {isFriday ? (
+                        <div className="h-[70px] flex items-center justify-center rounded-md bg-slate-100 text-slate-400 text-xs font-bold">
+                          튜터 없음
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-1">
+                          {periods.map((period) => {
+                            const item = findRequest(dateKey, period);
 
-                          return (
-                            <button
-                              key={period}
-                              onClick={() => {
-                                if (!item) return;
+                            return (
+                              <button
+                                key={period}
+                                onClick={() => {
+                                  if (!item) return;
 
-                                const next =
-                                  item.status === "신청됨"
-                                    ? "확인"
-                                    : item.status === "확인"
-                                    ? "완료"
-                                    : "신청됨";
+                                  const next =
+                                    item.status === "신청됨"
+                                      ? "확인"
+                                      : item.status === "확인"
+                                      ? "완료"
+                                      : "신청됨";
 
-                                updateStatus(item.id, next);
-                              }}
-                              className={`rounded-md px-1 py-1 text-xs font-bold text-center leading-tight border ${
-                                item
-                                  ? item.status === "완료"
-                                    ? "bg-slate-800 text-white border-slate-800"
-                                    : item.status === "확인"
-                                    ? "bg-slate-200 text-slate-900 border-slate-300"
-                                    : "bg-green-100 text-green-900 border-green-200"
-                                  : "bg-slate-50 text-slate-400 border-slate-100"
-                              }`}
-                              title={
-                                item
-                                  ? "클릭하면 신청됨 → 확인 → 완료 순서로 변경됩니다."
-                                  : ""
-                              }
-                            >
-                              {item
-                                ? `${period}교 ${item.className}`
-                                : `${period}교 -`}
-                            </button>
-                          );
-                        })}
-                      </div>
+                                  updateStatus(item.id, next);
+                                }}
+                                className={`rounded-md px-1 py-1 text-xs font-bold text-center leading-tight border ${
+                                  item
+                                    ? item.status === "완료"
+                                      ? "bg-slate-800 text-white border-slate-800"
+                                      : item.status === "확인"
+                                      ? "bg-slate-200 text-slate-900 border-slate-300"
+                                      : "bg-green-100 text-green-900 border-green-200"
+                                    : "bg-slate-50 text-slate-400 border-slate-100"
+                                }`}
+                                title={
+                                  item
+                                    ? "클릭하면 신청됨 → 확인 → 완료 순서로 변경됩니다."
+                                    : ""
+                                }
+                              >
+                                {item
+                                  ? `${period}교 ${item.className}`
+                                  : `${period}교 -`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -467,8 +487,8 @@ export default function TutorPage() {
             <div className="rounded bg-slate-800 text-white px-2 py-1 font-bold">
               완료
             </div>
-            <div className="text-slate-500">
-              신청된 교시를 클릭하면 상태가 변경됩니다.
+            <div className="rounded bg-slate-100 text-slate-400 border border-slate-100 px-2 py-1 font-bold">
+              금요일 미운영
             </div>
           </div>
         </section>
@@ -509,7 +529,7 @@ export default function TutorPage() {
                       교시
                     </th>
                     <th className="border border-slate-200 px-2 py-2">
-                      학반
+                      학반/장소
                     </th>
                     <th className="border border-slate-200 px-2 py-2">
                       상태
