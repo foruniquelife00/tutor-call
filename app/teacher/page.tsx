@@ -69,6 +69,46 @@ function makeCalendarWeeks(year: number, month: number) {
   return weeks;
 }
 
+function getButtonClass(existing: RequestItem | undefined, isMine: boolean) {
+  if (!existing) {
+    return "bg-blue-50 text-blue-700 hover:bg-blue-100";
+  }
+
+  if (!isMine) {
+    return "bg-slate-200 text-slate-500";
+  }
+
+  if (existing.status === "확인") {
+    return "bg-orange-100 text-orange-900 hover:bg-orange-200";
+  }
+
+  if (existing.status === "완료") {
+    return "bg-slate-800 text-white hover:bg-slate-700";
+  }
+
+  return "bg-green-100 text-green-800 hover:bg-green-200";
+}
+
+function getButtonText(
+  period: number,
+  existing: RequestItem | undefined,
+  isMine: boolean
+) {
+  if (!existing) return `${period}교시`;
+
+  if (!isMine) return `${period}교 ${existing.className}`;
+
+  if (existing.status === "확인") {
+    return `${period}교 확인됨`;
+  }
+
+  if (existing.status === "완료") {
+    return `${period}교 완료`;
+  }
+
+  return `${period}교 ${existing.className} 취소`;
+}
+
 export default function TeacherPage() {
   const today = new Date();
 
@@ -108,6 +148,32 @@ export default function TeacherPage() {
     );
   }
 
+  async function addLog({
+    action,
+    className,
+    date,
+    period,
+    status,
+    actor,
+  }: {
+    action: string;
+    className: string;
+    date: string;
+    period: number;
+    status: string;
+    actor: string;
+  }) {
+    await addDoc(collection(db, "logs"), {
+      action,
+      className,
+      date,
+      period,
+      status,
+      actor,
+      createdAt: serverTimestamp(),
+    });
+  }
+
   async function handlePeriodClick(date: Date, period: number) {
     const day = date.getDay();
 
@@ -136,6 +202,15 @@ export default function TeacherPage() {
 
         if (!ok) return;
 
+        await addLog({
+          action: "취소",
+          className: existing.className,
+          date: existing.date,
+          period: existing.period,
+          status: existing.status,
+          actor: existing.className,
+        });
+
         await deleteDoc(doc(db, "requests", existing.id));
         return;
       }
@@ -155,6 +230,15 @@ export default function TeacherPage() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+
+      await addLog({
+        action: "신청",
+        className: selectedClass,
+        date: dateKey,
+        period,
+        status: "신청됨",
+        actor: selectedClass,
+      });
     } catch (error) {
       console.error(error);
       alert("처리 중 오류가 발생했습니다.");
@@ -172,7 +256,7 @@ export default function TeacherPage() {
               🗓️ 디지털 튜터 수업지원 신청
             </h1>
             <p className="text-xs md:text-sm text-slate-500">
-              월~목요일만 신청 가능합니다. 내 학반 신청 건은 다시 누르면 취소됩니다.
+              월~목요일만 신청 가능합니다. 내 신청은 다시 누르면 취소됩니다.
             </p>
           </div>
 
@@ -286,26 +370,23 @@ export default function TeacherPage() {
                                 key={period}
                                 onClick={() => handlePeriodClick(date, period)}
                                 disabled={loadingKey === key}
-                                className={`rounded-md px-1 py-1 text-xs font-bold text-center leading-tight ${
-                                  existing
-                                    ? isMine
-                                      ? "bg-green-100 text-green-800 hover:bg-green-200"
-                                      : "bg-slate-200 text-slate-500"
-                                    : "bg-blue-50 text-blue-700 hover:bg-blue-100"
-                                }`}
+                                className={`rounded-md px-1 py-1 text-xs font-bold text-center leading-tight ${getButtonClass(
+                                  existing,
+                                  isMine
+                                )}`}
                                 title={
                                   existing
                                     ? isMine
-                                      ? "다시 누르면 취소됩니다."
+                                      ? existing.status === "확인"
+                                        ? "튜터가 확인했습니다. 다시 누르면 취소됩니다."
+                                        : existing.status === "완료"
+                                        ? "튜터가 완료 처리했습니다. 다시 누르면 취소됩니다."
+                                        : "다시 누르면 취소됩니다."
                                       : "다른 학반이 이미 신청했습니다."
                                     : "신청 가능"
                                 }
                               >
-                                {existing
-                                  ? isMine
-                                    ? `${period}교 ${existing.className} 취소`
-                                    : `${period}교 ${existing.className}`
-                                  : `${period}교시`}
+                                {getButtonText(period, existing, isMine)}
                               </button>
                             );
                           })}
@@ -323,7 +404,13 @@ export default function TeacherPage() {
               신청 가능
             </div>
             <div className="rounded bg-green-100 text-green-800 px-2 py-1 font-bold">
-              내 신청, 다시 클릭 시 취소
+              내 신청
+            </div>
+            <div className="rounded bg-orange-100 text-orange-900 px-2 py-1 font-bold">
+              튜터 확인
+            </div>
+            <div className="rounded bg-slate-800 text-white px-2 py-1 font-bold">
+              완료
             </div>
             <div className="rounded bg-slate-200 text-slate-500 px-2 py-1 font-bold">
               다른 신청 또는 금요일 미운영
