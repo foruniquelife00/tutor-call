@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   addDoc,
   collection,
-  deleteDoc,
   doc,
   onSnapshot,
   serverTimestamp,
+  updateDoc,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
@@ -20,17 +20,18 @@ type RequestItem = {
   status: string;
 };
 
-const classes = [
-  "1-1",
-  "2-1",
-  "3-1",
-  "4-1",
-  "5-1",
-  "6-1",
-  "영어실",
-  "통합1반",
-  "통합2반",
-];
+type LogItem = {
+  id: string;
+  action: string;
+  className: string;
+  date: string;
+  period: number;
+  status: string;
+  actor: string;
+  createdAt?: {
+    seconds: number;
+  };
+};
 
 const periods = [1, 2, 3, 4];
 const weekdays = ["월", "화", "수", "목", "금"];
@@ -40,6 +41,22 @@ function toDateKey(date: Date) {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function getWeekdayFromDateKey(dateKey: string) {
+  const date = new Date(`${dateKey}T00:00:00`);
+  return ["일", "월", "화", "수", "목", "금", "토"][date.getDay()];
+}
+
+function formatLogTime(log: LogItem) {
+  if (!log.createdAt?.seconds) return "방금";
+  const date = new Date(log.createdAt.seconds * 1000);
+  return date.toLocaleString("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function makeCalendarWeeks(year: number, month: number) {
@@ -69,54 +86,17 @@ function makeCalendarWeeks(year: number, month: number) {
   return weeks;
 }
 
-function getButtonClass(existing: RequestItem | undefined, isMine: boolean) {
-  if (!existing) {
-    return "bg-blue-50 text-blue-700 hover:bg-blue-100";
-  }
-
-  if (!isMine) {
-    return "bg-slate-200 text-slate-500";
-  }
-
-  if (existing.status === "확인") {
-    return "bg-orange-100 text-orange-900 hover:bg-orange-200";
-  }
-
-  if (existing.status === "완료") {
-    return "bg-slate-800 text-white hover:bg-slate-700";
-  }
-
-  return "bg-green-100 text-green-800 hover:bg-green-200";
-}
-
-function getButtonText(
-  period: number,
-  existing: RequestItem | undefined,
-  isMine: boolean
-) {
-  if (!existing) return `${period}교시`;
-
-  if (!isMine) return `${period}교 ${existing.className}`;
-
-  if (existing.status === "확인") {
-    return `${period}교 확인됨`;
-  }
-
-  if (existing.status === "완료") {
-    return `${period}교 완료`;
-  }
-
-  return `${period}교 ${existing.className} 취소`;
-}
-
-export default function TeacherPage() {
+export default function TutorPage() {
   const today = new Date();
 
-  const [selectedClass, setSelectedClass] = useState("1-1");
   const [currentYear, setCurrentYear] = useState(today.getFullYear());
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
   const [requests, setRequests] = useState<RequestItem[]>([]);
-  const [loadingKey, setLoadingKey] = useState("");
+  const [logs, setLogs] = useState<LogItem[]>([]);
+  const [newAlert, setNewAlert] = useState(false);
+
+  const previousCount = useRef(0);
+  const initialized = useRef(false);
 
   const weeks = useMemo(
     () => makeCalendarWeeks(currentYear, currentMonth),
@@ -130,7 +110,38 @@ export default function TeacherPage() {
         ...docSnap.data(),
       })) as RequestItem[];
 
-      setRequests(data.filter((item) => item.date && item.period));
+      const validData = data.filter((item) => item.date && item.period);
+
+      if (initialized.current && validData.length > previousCount.current) {
+        setNewAlert(true);
+        playBeep();
+        setTimeout(() => setNewAlert(false), 4000);
+      }
+
+      previousCount.current = validData.length;
+      initialized.current = true;
+      setRequests(validData);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, "logs"), (snapshot) => {
+      const data = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data(),
+      })) as LogItem[];
+
+      const sortedLogs = data
+        .filter((item) => item.date && item.period)
+        .sort((a, b) => {
+          const aTime = a.createdAt?.seconds || 0;
+          const bTime = b.createdAt?.seconds || 0;
+          return bTime - aTime;
+        });
+
+      setLogs(sortedLogs);
     });
 
     return () => unsubscribe();
@@ -140,6 +151,17 @@ export default function TeacherPage() {
     const next = new Date(currentYear, currentMonth + diff, 1);
     setCurrentYear(next.getFullYear());
     setCurrentMonth(next.getMonth());
+  }
+
+  function playBeep() {
+    try {
+      const audio = new Audio(
+        "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA="
+      );
+      audio.play();
+    } catch {
+      console.log("알림음 재생 실패");
+    }
   }
 
   function findRequest(dateKey: string, period: number) {
@@ -174,111 +196,274 @@ export default function TeacherPage() {
     });
   }
 
-  async function handlePeriodClick(date: Date, period: number) {
-    const day = date.getDay();
+  async function updateStatus(item: RequestItem, status: string) {
+    await updateDoc(doc(db, "requests", item.id), {
+      status,
+      updatedAt: serverTimestamp(),
+    });
 
-    if (day === 5) {
-      alert("금요일은 디지털 튜터 수업지원 신청일이 아닙니다.");
+    await addLog({
+      action: status === "확인" ? "확인" : "완료",
+      className: item.className,
+      date: item.date,
+      period: item.period,
+      status,
+      actor: "디지털 튜터",
+    });
+  }
+
+  const monthRequests = requests.filter((item) => {
+    const monthKey = `${currentYear}-${String(currentMonth + 1).padStart(
+      2,
+      "0"
+    )}`;
+
+    const weekday = getWeekdayFromDateKey(item.date);
+
+    return item.date.startsWith(monthKey) && weekday !== "금";
+  });
+
+  const sortedMonthRequests = [...monthRequests].sort((a, b) => {
+    if (a.date === b.date) return a.period - b.period;
+    return a.date.localeCompare(b.date);
+  });
+
+  const monthLogs = logs.filter((item) => {
+    const monthKey = `${currentYear}-${String(currentMonth + 1).padStart(
+      2,
+      "0"
+    )}`;
+    return item.date.startsWith(monthKey);
+  });
+
+  function printMonthlyReport() {
+    const rows = sortedMonthRequests
+      .map(
+        (item, index) => `
+          <tr>
+            <td>${index + 1}</td>
+            <td>${item.date}</td>
+            <td>${getWeekdayFromDateKey(item.date)}</td>
+            <td>${item.period}교시</td>
+            <td>${item.className}</td>
+            <td>${item.status}</td>
+          </tr>
+        `
+      )
+      .join("");
+
+    const logRows = monthLogs
+      .slice()
+      .reverse()
+      .map(
+        (item, index) => `
+          <tr>
+            <td>${index + 1}</td>
+            <td>${formatLogTime(item)}</td>
+            <td>${item.action}</td>
+            <td>${item.date}</td>
+            <td>${getWeekdayFromDateKey(item.date)}</td>
+            <td>${item.period}교시</td>
+            <td>${item.className}</td>
+            <td>${item.actor}</td>
+          </tr>
+        `
+      )
+      .join("");
+
+    const printWindow = window.open("", "_blank");
+
+    if (!printWindow) {
+      alert("팝업이 차단되었습니다. 팝업 허용 후 다시 시도해주세요.");
       return;
     }
 
-    const dateKey = toDateKey(date);
-    const existing = findRequest(dateKey, period);
-    const key = `${dateKey}-${period}`;
-    setLoadingKey(key);
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html lang="ko">
+        <head>
+          <meta charset="UTF-8" />
+          <title>디지털 튜터 월별 수업지원 신청 목록</title>
+          <style>
+            * {
+              box-sizing: border-box;
+            }
 
-    try {
-      if (existing) {
-        if (existing.className !== selectedClass) {
-          alert(
-            `${dateKey} ${period}교시는 이미 ${existing.className}이 신청했습니다.`
-          );
-          return;
-        }
+            body {
+              font-family: Arial, "Malgun Gothic", sans-serif;
+              padding: 28px;
+              color: #111827;
+              background: #ffffff;
+            }
 
-        const ok = confirm(
-          `${dateKey} ${period}교시 ${selectedClass} 신청을 취소할까요?`
-        );
+            .header {
+              display: flex;
+              justify-content: space-between;
+              align-items: flex-end;
+              border-bottom: 2px solid #111827;
+              padding-bottom: 12px;
+              margin-bottom: 20px;
+            }
 
-        if (!ok) return;
+            h1 {
+              font-size: 22px;
+              margin: 0;
+            }
 
-        await addLog({
-          action: "취소",
-          className: existing.className,
-          date: existing.date,
-          period: existing.period,
-          status: existing.status,
-          actor: existing.className,
-        });
+            h2 {
+              font-size: 16px;
+              margin: 28px 0 10px;
+            }
 
-        await deleteDoc(doc(db, "requests", existing.id));
-        return;
-      }
+            .subtitle {
+              margin-top: 6px;
+              color: #4b5563;
+              font-size: 14px;
+            }
 
-      const ok = confirm(
-        `${dateKey} ${period}교시에 ${selectedClass} 수업지원을 신청할까요?`
-      );
+            .summary {
+              font-size: 14px;
+              font-weight: 700;
+            }
 
-      if (!ok) return;
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              font-size: 12px;
+            }
 
-      await addDoc(collection(db, "requests"), {
-        className: selectedClass,
-        date: dateKey,
-        period,
-        type: "수업지원",
-        status: "신청됨",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+            th, td {
+              border: 1px solid #d1d5db;
+              padding: 7px;
+              text-align: center;
+            }
 
-      await addLog({
-        action: "신청",
-        className: selectedClass,
-        date: dateKey,
-        period,
-        status: "신청됨",
-        actor: selectedClass,
-      });
-    } catch (error) {
-      console.error(error);
-      alert("처리 중 오류가 발생했습니다.");
-    } finally {
-      setLoadingKey("");
-    }
+            th {
+              background: #f3f4f6;
+              font-weight: 700;
+            }
+
+            .empty {
+              padding: 28px;
+              text-align: center;
+              color: #6b7280;
+            }
+
+            .footer {
+              margin-top: 24px;
+              font-size: 12px;
+              color: #6b7280;
+              text-align: right;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div>
+              <h1>디지털 튜터 월별 수업지원 신청 목록</h1>
+              <div class="subtitle">${currentYear}년 ${
+      currentMonth + 1
+    }월, 월~목 운영</div>
+            </div>
+            <div class="summary">현재 신청 ${sortedMonthRequests.length}건</div>
+          </div>
+
+          <h2>현재 신청 현황</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>순번</th>
+                <th>날짜</th>
+                <th>요일</th>
+                <th>교시</th>
+                <th>학반/장소</th>
+                <th>상태</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${
+                rows ||
+                `<tr><td class="empty" colspan="6">이번 달 신청 내역이 없습니다.</td></tr>`
+              }
+            </tbody>
+          </table>
+
+          <h2>누적 처리 기록</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>순번</th>
+                <th>시간</th>
+                <th>구분</th>
+                <th>날짜</th>
+                <th>요일</th>
+                <th>교시</th>
+                <th>학반/장소</th>
+                <th>처리자</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${
+                logRows ||
+                `<tr><td class="empty" colspan="8">이번 달 처리 기록이 없습니다.</td></tr>`
+              }
+            </tbody>
+          </table>
+
+          <div class="footer">
+            출력일: ${new Date().toLocaleDateString("ko-KR")}
+          </div>
+
+          <script>
+            window.onload = function() {
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `);
+
+    printWindow.document.close();
   }
 
   return (
-    <main className="min-h-screen bg-blue-50 p-2">
+    <main className="min-h-screen bg-green-50 p-2">
       <div className="max-w-7xl mx-auto">
-        <header className="bg-white rounded-2xl shadow p-3 mb-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+        <header className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3 mb-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
           <div>
-            <h1 className="text-xl md:text-2xl font-black text-blue-900">
-              🗓️ 디지털 튜터 수업지원 신청
+            <h1 className="text-xl md:text-2xl font-black text-slate-900">
+              🌿 디지털 튜터 수업지원 대시보드
             </h1>
             <p className="text-xs md:text-sm text-slate-500">
-              월~목요일만 신청 가능합니다. 내 신청은 다시 누르면 취소됩니다.
+              월~목요일 1~4교시 신청 현황입니다. 튜터는 취소할 수 없습니다.
             </p>
           </div>
 
-          <label className="flex items-center gap-2">
-            <span className="font-bold text-slate-700">신청 장소/학반</span>
-            <select
-              value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
-              className="border rounded-xl px-3 py-2 text-base font-bold"
+          <div className="flex flex-wrap gap-2 items-center">
+            <button
+              onClick={printMonthlyReport}
+              className="rounded-lg bg-green-700 text-white px-3 py-2 text-sm font-black hover:bg-green-800"
             >
-              {classes.map((c) => (
-                <option key={c}>{c}</option>
-              ))}
-            </select>
-          </label>
+              PDF 저장/인쇄
+            </button>
+
+            <div className="rounded-lg bg-green-700 text-white px-3 py-2 text-sm font-black">
+              현재 신청 {monthRequests.length}건
+            </div>
+          </div>
         </header>
 
-        <section className="bg-white rounded-2xl shadow p-3">
+        {newAlert && (
+          <div className="mb-2 rounded-xl bg-green-700 text-white p-3 text-lg font-black shadow animate-pulse">
+            🔔 새 수업지원 신청!
+          </div>
+        )}
+
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3">
           <div className="flex items-center justify-between mb-2">
             <button
               onClick={() => moveMonth(-1)}
-              className="rounded-lg bg-slate-200 px-3 py-2 text-sm font-bold"
+              className="rounded-lg bg-slate-100 text-slate-900 border border-slate-200 px-3 py-2 text-sm font-bold hover:bg-slate-200"
             >
               ◀ 이전
             </button>
@@ -289,7 +474,7 @@ export default function TeacherPage() {
 
             <button
               onClick={() => moveMonth(1)}
-              className="rounded-lg bg-slate-200 px-3 py-2 text-sm font-bold"
+              className="rounded-lg bg-slate-100 text-slate-900 border border-slate-200 px-3 py-2 text-sm font-bold hover:bg-slate-200"
             >
               다음 ▶
             </button>
@@ -299,10 +484,10 @@ export default function TeacherPage() {
             {weekdays.map((day) => (
               <div
                 key={day}
-                className={`text-center text-sm font-black rounded-lg py-1.5 ${
+                className={`text-center text-sm font-black border rounded-lg py-1.5 ${
                   day === "금"
-                    ? "bg-slate-100 text-slate-400"
-                    : "bg-blue-100 text-blue-800"
+                    ? "bg-slate-50 text-slate-400 border-slate-100"
+                    : "bg-slate-100 text-slate-800 border-slate-200"
                 }`}
               >
                 {day}
@@ -318,7 +503,7 @@ export default function TeacherPage() {
                     return (
                       <div
                         key={dayIndex}
-                        className="min-h-[105px] rounded-lg bg-slate-50 border"
+                        className="min-h-[105px] rounded-lg bg-slate-50 border border-slate-100"
                       />
                     );
                   }
@@ -332,22 +517,22 @@ export default function TeacherPage() {
                       key={dateKey}
                       className={`min-h-[105px] rounded-lg border p-1.5 ${
                         isFriday
-                          ? "bg-slate-50 border-slate-200"
+                          ? "bg-slate-50 border-slate-100"
                           : isToday
-                          ? "bg-yellow-50 border-yellow-400"
+                          ? "bg-green-50 border-green-500"
                           : "bg-white border-slate-200"
                       }`}
                     >
                       <div className="flex justify-between items-center mb-1">
                         <div
                           className={`font-black text-sm ${
-                            isFriday ? "text-slate-400" : "text-slate-800"
+                            isFriday ? "text-slate-400" : "text-slate-900"
                           }`}
                         >
                           {date.getDate()}일
                         </div>
                         {isToday && !isFriday && (
-                          <div className="text-[10px] bg-yellow-300 rounded-full px-1.5 py-0.5 font-bold">
+                          <div className="text-[10px] bg-green-700 text-white rounded-full px-1.5 py-0.5 font-bold">
                             오늘
                           </div>
                         )}
@@ -360,33 +545,41 @@ export default function TeacherPage() {
                       ) : (
                         <div className="grid grid-cols-2 gap-1">
                           {periods.map((period) => {
-                            const existing = findRequest(dateKey, period);
-                            const key = `${dateKey}-${period}`;
-                            const isMine =
-                              existing?.className === selectedClass;
+                            const item = findRequest(dateKey, period);
 
                             return (
                               <button
                                 key={period}
-                                onClick={() => handlePeriodClick(date, period)}
-                                disabled={loadingKey === key}
-                                className={`rounded-md px-1 py-1 text-xs font-bold text-center leading-tight ${getButtonClass(
-                                  existing,
-                                  isMine
-                                )}`}
+                                onClick={() => {
+                                  if (!item) return;
+
+                                  const next =
+                                    item.status === "신청됨"
+                                      ? "확인"
+                                      : item.status === "확인"
+                                      ? "완료"
+                                      : "신청됨";
+
+                                  updateStatus(item, next);
+                                }}
+                                className={`rounded-md px-1 py-1 text-xs font-bold text-center leading-tight border ${
+                                  item
+                                    ? item.status === "완료"
+                                      ? "bg-slate-800 text-white border-slate-800"
+                                      : item.status === "확인"
+                                      ? "bg-slate-200 text-slate-900 border-slate-300"
+                                      : "bg-green-100 text-green-900 border-green-200"
+                                    : "bg-slate-50 text-slate-400 border-slate-100"
+                                }`}
                                 title={
-                                  existing
-                                    ? isMine
-                                      ? existing.status === "확인"
-                                        ? "튜터가 확인했습니다. 다시 누르면 취소됩니다."
-                                        : existing.status === "완료"
-                                        ? "튜터가 완료 처리했습니다. 다시 누르면 취소됩니다."
-                                        : "다시 누르면 취소됩니다."
-                                      : "다른 학반이 이미 신청했습니다."
-                                    : "신청 가능"
+                                  item
+                                    ? "클릭하면 신청됨 → 확인 → 완료 순서로 변경됩니다."
+                                    : ""
                                 }
                               >
-                                {getButtonText(period, existing, isMine)}
+                                {item
+                                  ? `${period}교 ${item.className}`
+                                  : `${period}교 -`}
                               </button>
                             );
                           })}
@@ -399,23 +592,157 @@ export default function TeacherPage() {
             ))}
           </div>
 
-          <div className="mt-2 flex flex-wrap gap-2 text-xs">
-            <div className="rounded bg-blue-50 text-blue-700 px-2 py-1 font-bold">
-              신청 가능
+          <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
+            <div className="rounded bg-green-100 text-green-900 border border-green-200 px-2 py-1 font-bold">
+              신청됨
             </div>
-            <div className="rounded bg-green-100 text-green-800 px-2 py-1 font-bold">
-              내 신청
-            </div>
-            <div className="rounded bg-orange-100 text-orange-900 px-2 py-1 font-bold">
-              튜터 확인
+            <div className="rounded bg-slate-200 text-slate-900 border border-slate-300 px-2 py-1 font-bold">
+              확인
             </div>
             <div className="rounded bg-slate-800 text-white px-2 py-1 font-bold">
               완료
             </div>
-            <div className="rounded bg-slate-200 text-slate-500 px-2 py-1 font-bold">
-              다른 신청 또는 금요일 미운영
+            <div className="rounded bg-slate-100 text-slate-400 border border-slate-100 px-2 py-1 font-bold">
+              금요일 미운영
             </div>
           </div>
+        </section>
+
+        <section className="mt-2 bg-white rounded-2xl shadow-sm border border-slate-200 p-3">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-2">
+            <h2 className="font-black text-base text-slate-900">
+              현재 월별 신청 목록
+            </h2>
+
+            <button
+              onClick={printMonthlyReport}
+              className="rounded-lg bg-green-700 text-white px-3 py-2 text-sm font-bold hover:bg-green-800"
+            >
+              이 목록 PDF 저장/인쇄
+            </button>
+          </div>
+
+          {sortedMonthRequests.length === 0 ? (
+            <p className="text-sm text-slate-400">
+              이번 달 신청 내역이 없습니다.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-800">
+                    <th className="border border-slate-200 px-2 py-2">
+                      순번
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      날짜
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      요일
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      교시
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      학반/장소
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      상태
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {sortedMonthRequests.map((item, index) => (
+                    <tr key={item.id} className="text-center">
+                      <td className="border border-slate-200 px-2 py-2">
+                        {index + 1}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2 font-bold">
+                        {item.date}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {getWeekdayFromDateKey(item.date)}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {item.period}교시
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2 font-bold">
+                        {item.className}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {item.status}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="mt-2 bg-white rounded-2xl shadow-sm border border-slate-200 p-3">
+          <h2 className="font-black text-base text-slate-900 mb-2">
+            누적 신청/취소/처리 기록
+          </h2>
+
+          {monthLogs.length === 0 ? (
+            <p className="text-sm text-slate-400">
+              이번 달 누적 기록이 없습니다.
+            </p>
+          ) : (
+            <div className="overflow-x-auto max-h-[320px] overflow-y-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead className="sticky top-0">
+                  <tr className="bg-slate-100 text-slate-800">
+                    <th className="border border-slate-200 px-2 py-2">
+                      시간
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      구분
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      날짜
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      교시
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      학반/장소
+                    </th>
+                    <th className="border border-slate-200 px-2 py-2">
+                      처리자
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {monthLogs.map((item) => (
+                    <tr key={item.id} className="text-center">
+                      <td className="border border-slate-200 px-2 py-2">
+                        {formatLogTime(item)}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2 font-bold">
+                        {item.action}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {item.date}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {item.period}교시
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2 font-bold">
+                        {item.className}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {item.actor}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       </div>
     </main>
